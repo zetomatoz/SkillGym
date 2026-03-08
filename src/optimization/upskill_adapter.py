@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from textwrap import dedent
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from openai import OpenAI
 
@@ -49,57 +49,77 @@ class UpskillOptimizer:
             raise RuntimeError(
                 "Strict mode requires OPENAI_API_KEY for Upskill generation."
             )
-
+        frontmatter, body = self._split_frontmatter(skill_text)
+        body = self._normalize_text(body)
         recommendations = self._build_recommendations(context)
-        candidate_body = dedent(
+        title = self._extract_title(body) or "Skill"
+        intro = self._extract_intro(body)
+        when_to_use = self._extract_section(body, "When to use")
+        tools = self._extract_section(body, "Tools")
+        examples = self._extract_section(body, "Examples")
+        notes = self._extract_section(body, "Notes")
+
+        when_to_use_block = when_to_use or "- Use this skill for domain-specific tasks in this area."
+        tools_block = tools or "- Add concrete tools/libraries relevant to this domain."
+        examples_block = examples or "Add executable examples for the most common task variants."
+        notes_block = notes or "- Keep outputs validated and formatted according to user requirements."
+
+        rewritten_body = dedent(
             f"""
-            ## Continuous Improvement Overrides
-            
-            ### Diagnosed Weaknesses
+            # {title}
+
+            {intro}
+
+            ## When to use
+            {when_to_use_block}
+
+            ## Tools
+            {tools_block}
+
+            ## Examples
+            {examples_block}
+
+            ## Standard Workflow
+            1. Restate the user goal and output contract before taking actions.
+            2. Create a short plan with explicit checkpoints.
+            3. Execute the smallest useful action first, then iterate with verification.
+            4. Before final output, run a compact correctness and formatting check.
+
+            ## Diagnostics from Recent Runs
             {recommendations['failures']}
-            
-            ### Trace-Guided Adjustments
+
+            ## Improvement Priorities
             {recommendations['adjustments']}
-            
-            ### Harbor + TruLens Execution Recipe
-            1. Always run Harbor benchmarks with deterministic seeds before editing the skill.
-            2. Capture raw traces and normalize them immediately for TruLens GPA analysis.
-            3. Elevate GPA dimensions (goal fulfillment, plan quality, adherence, efficiency, consistency) as hard checks.
-            4. Summarize recurrent failure tags and update troubleshooting guidance below.
-            
-            ### Failure Tag Playbook
+
+            ## Failure Tag Playbook
             {recommendations['playbook']}
-            
-            ### Token & Latency Budgets
-            - Keep total tokens under 1.1x the current baseline average.
-            - Abort and rewrite plans that exceed 12 steps unless justified by task scope.
-            
-            ### Promotion Gate Reminders
-            - Pass rate must improve by >=3 percentage points.
-            - Catastrophic failures may never increase.
-            - GPA aggregate must hold or improve.
-            - Latency and token use must trend downward.
+
+            ## Quality Guardrails
+            - Keep instructions domain-specific and action-oriented.
+            - Avoid framework/meta commentary unless the user asks for it.
+            - Prefer concrete examples and explicit checks over generic advice.
+
+            ## Notes
+            {notes_block}
             """
         ).strip()
 
-        merged_skill = (
-            skill_text.rstrip()
-            + "\n\n"
-            + "<!-- Upskill-generated guidance -->\n"
-            + candidate_body
+        rewritten_skill = (
+            f"{frontmatter}\n\n{rewritten_body}".strip()
+            if frontmatter
+            else rewritten_body
         )
 
         rationale = (
-            "Derived from Upskill heuristic: reinforced missing-plan coverage and "
-            "tightened Harbor/TruLens hand-offs using observed failure tags."
+            "Derived from Upskill heuristic: fully rewrote the skill to incorporate failure-driven improvements while preserving domain focus."
         )
 
         return [
-            SkillCandidate(
-                name=f"{context.skill_version.skill_name}-upskill",
-                content=merged_skill,
-                rationale=rationale,
-            )
+                SkillCandidate(
+                    name=f"{context.skill_version.skill_name}-upskill",
+                    content=rewritten_skill,
+                    rationale=rationale,
+                )
         ]
 
     def _propose_with_openai(
@@ -209,9 +229,9 @@ class UpskillOptimizer:
             )
         adjustments = "\n".join(
             [
-                "- Expand planning rubric with explicit goal/plan/adherence checklists.",
-                "- Emphasize Harbor runtime config reuse to ensure reproducibility.",
-                "- Inject TruLens GPA rationales into troubleshooting tips.",
+                "- Strengthen decision points for tool/strategy selection before execution.",
+                "- Add compact verification checks before final output.",
+                "- Add fallback behavior when expected data/files are missing or malformed.",
             ]
         )
         playbook = "\n".join(
@@ -227,3 +247,75 @@ class UpskillOptimizer:
             "adjustments": adjustments,
             "playbook": playbook,
         }
+
+    def _infer_skill_focus(self, skill_text: str) -> str:
+        for line in skill_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                return stripped[2:].strip()
+        return "the current skill domain"
+
+    def _extract_title(self, skill_text: str) -> str:
+        for line in skill_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                return stripped[2:].strip()
+        return ""
+
+    def _extract_intro(self, skill_text: str) -> str:
+        lines = skill_text.splitlines()
+        saw_h1 = False
+        intro_lines: List[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("# "):
+                saw_h1 = True
+                continue
+            if not saw_h1:
+                continue
+            if stripped.startswith("## "):
+                break
+            intro_lines.append(line)
+        intro = "\n".join(intro_lines).strip()
+        if intro:
+            return intro
+        title = self._extract_title(skill_text) or "this skill"
+        return f"This skill provides focused, practical guidance for {title.lower()} tasks."
+
+    def _split_frontmatter(self, skill_text: str) -> Tuple[str, str]:
+        lines = skill_text.splitlines()
+        if len(lines) < 3 or lines[0].strip() != "---":
+            return "", skill_text.strip()
+        for idx in range(1, len(lines)):
+            if lines[idx].strip() == "---":
+                frontmatter = "\n".join(lines[: idx + 1]).strip()
+                body = "\n".join(lines[idx + 1 :]).strip()
+                return frontmatter, body
+        return "", skill_text.strip()
+
+    def _extract_section(self, skill_text: str, section_name: str) -> str:
+        lines = skill_text.splitlines()
+        target = section_name.strip().lower()
+        start_idx = -1
+        for idx, line in enumerate(lines):
+            stripped = line.strip().lower()
+            if stripped == f"## {target}":
+                start_idx = idx + 1
+                break
+        if start_idx == -1:
+            return ""
+
+        section_lines: List[str] = []
+        for line in lines[start_idx:]:
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                break
+            section_lines.append(line)
+        return self._normalize_text("\n".join(section_lines).strip())
+
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return ""
+        normalized = dedent(text).strip()
+        cleaned_lines = [line.rstrip() for line in normalized.splitlines()]
+        return "\n".join(cleaned_lines).strip()

@@ -55,8 +55,8 @@ class UpskillSettings:
 class GepaSettings:
     reflection_model: str = "openai/gpt-4o-mini"
     objective: str = (
-        "Evolve the SkillGym instructions so benchmark runs pass more tasks "
-        "while TruLens GPA improves across all dimensions."
+        "Evolve the provided skill instructions to improve task success while "
+        "preserving domain-specific guidance and practical examples."
     )
     max_metric_calls: int = 8
 
@@ -132,8 +132,8 @@ def load_settings(env_file: Path | None = None) -> SkillGymSettings:
         objective=os.getenv(
             "GEPA_OBJECTIVE",
             (
-                "Evolve the SkillGym instructions using benchmark traces, "
-                "TruLens rationales, and optimization telemetry."
+                "Evolve the provided skill using benchmark traces and failure "
+                "signals, while keeping guidance domain-specific."
             ),
         ),
         max_metric_calls=int(os.getenv("GEPA_MAX_METRIC_CALLS", "8")),

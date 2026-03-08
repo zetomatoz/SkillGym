@@ -17,7 +17,7 @@ class GepaCandidate:
 
 
 class GEPAOptimizer:
-    """GEPA-backed optimizer that uses `optimize_anything` with Harbor telemetry."""
+    """GEPA-backed optimizer that proposes skill edits from failure signals."""
 
     def __init__(self, settings: GepaSettings, strict_mode: bool = False) -> None:
         self.settings = settings
@@ -54,7 +54,7 @@ class GEPAOptimizer:
             )
             content = self._extract_candidate_text(result.best_candidate)
             rationale = (
-                "GEPA reflection using Harbor/TruLens heuristics "
+                "GEPA reflection using failure-tag and outcome heuristics "
                 f"(max_metric_calls={self.settings.max_metric_calls})."
             )
             return [
@@ -94,7 +94,7 @@ class GEPAOptimizer:
                 {
                     "failure_tag": "general",
                     "count": 1,
-                    "prompt": "Improve overall planning discipline and TruLens GPA.",
+                    "prompt": "Improve task planning discipline and output reliability.",
                 }
             )
         return dataset
@@ -103,9 +103,13 @@ class GEPAOptimizer:
         text_lower = candidate_text.lower()
         score = 0.35
         notes: List[str] = []
-        for keyword in ("harbor", "trulens", "plan", "promotion", "gpa", "gepa"):
+        for keyword in ("plan", "verify", "checklist", "fallback", "examples", "constraints"):
             if keyword in text_lower:
                 score += 0.05
+        for anti_keyword in ("harbor", "trulens", "promotion gate", "gpa", "gepa"):
+            if anti_keyword in text_lower:
+                score -= 0.08
+                notes.append(f"Contains non-domain framework text: {anti_keyword}")
         tag = example.get("failure_tag")
         if tag and tag.replace("-", " ") in text_lower:
             score += 0.2
@@ -113,7 +117,8 @@ class GEPAOptimizer:
         coverage = len(candidate_text.splitlines())
         if coverage > 40:
             score += 0.05
-        return min(score, 1.0), {"notes": notes or ["heuristic score"], "example": example}
+        score = max(0.0, min(score, 1.0))
+        return score, {"notes": notes or ["heuristic score"], "example": example}
 
     def _extract_candidate_text(self, candidate: Dict | str) -> str:
         if isinstance(candidate, str):
